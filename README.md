@@ -8,39 +8,27 @@ Work in progress.
 pip install -r requirements.txt
 ```
 
-2. Download [CMU_ARCTIC](http://festvox.org/cmu_arctic/) dataset.
-
+2. Preprocess
+There must be train.csv, test.csv, wavs/ in input_dir
+```
+python preprocess.py input_dir output_dir
+```
 3. Train the model and save. The default parameters are pretty much the same as int the original paper. 
 Raise the flag _--preprocess_ when execute the first time.
 
 ```
-python train.py \
-    --preprocess \
-    --wav_dir your_downloaded_wav_dir \
-    --data_dir preprocessed_feature_dir \
-    --model_file saved_model_name \
+python train.py preprocessed_feature_dir
 ```
 
 4. Use trained model to decode/reconstruct a wav file from the mcc feature.
 
 ```
-python decode.py \
-    --infile wav_file
-    --outfile reconstruct_file_name
-    --data_dir preprocessed_feature_dir \
-    --model_file saved_model_name \
+python decode.py --model_file=mdoel_path --scaler_file=scaler_path --infile=wav_file --save_path=file_save_path
 ```
 
 [FFTNet_generator](FFTNet_generator.py) and [FFTNet_vocoder](FFTNet_vocoder.py) are two files I used to test the model 
 workability using torchaudio yesno dataset.
 
-## Current result
-
-There are some files decoded in the [samples](samples) folder. 
-
-## Differences from paper
-
-* window size: 400 >> depend on minimum_f0 (cuz I use pyworld to get f0 and mcc coefficients)
 
 ## TODO
 
