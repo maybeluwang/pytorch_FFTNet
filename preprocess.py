@@ -11,10 +11,10 @@ from librosa.util import frame
 import pyworld as world
 import pysptk as sptk
 import numpy as np
-from utils import repeat_last_padding, encoder
+from utils import repeat_last_padding, encoder, np_mulaw_quantized
 from sklearn.preprocessing import StandardScaler
-
-
+import argparse
+import audio
 def get_features(filename, *, winlen, winstep, n_mcep, mcep_alpha, minf0, maxf0, type):
     wav, sr = load(filename, sr=None)
 
@@ -93,11 +93,12 @@ def preprocess_cmu(wav_dir, output, *, q_channels, winlen, winstep, n_mcep, mcep
     calc_stats(train_data, out_dir)
 
 
-def _process_wav(file_list, outfile, winlen, winstep, n_mcep, mcep_alpha, minf0, maxf0, q_channels, type):
+def _process_wav(file_list, wav_dir, outfile, winlen, winstep, n_mcep, mcep_alpha, minf0, maxf0, q_channels, vocoderinput):
     data_dict = {}
     enc = encoder(q_channels)
     for f in tqdm(file_list):
-        wav, sr = load(f, sr=None)
+        file = os.path.join(wav_dir, f)
+        wav, sr = load(file, sr=None)
 
         x = wav.astype(float)
         _f0, t = world.harvest(x, sr, f0_floor=minf0, f0_ceil=maxf0,
@@ -107,7 +108,7 @@ def _process_wav(file_list, outfile, winlen, winstep, n_mcep, mcep_alpha, minf0,
         window_size = int(sr * winlen)
         hop_size = int(sr * winstep)
         # get mel
-        if type == 'mcc':
+        if vocoderinput == 'mcc':
             nfft = 2 ** (window_size - 1).bit_length()
             spec = np.abs(stft(x, n_fft=nfft, hop_length=hop_size, win_length=window_size, window='blackman')) ** 2
             h = sptk.mcep(spec, n_mcep - 1, mcep_alpha, eps=-60, etype=2, itype=4).T
@@ -123,26 +124,49 @@ def _process_wav(file_list, outfile, winlen, winstep, n_mcep, mcep_alpha, minf0,
     np.savez(outfile, **data_dict)
 
 
-def preprocess(wav_dir, output, **kwargs):
-    in_dir = os.path.join(wav_dir)
-    out_dir = os.path.join(output)
-    # print(in_dir, out_dir)
-    train_data = os.path.join(out_dir, 'train.npz')
-    test_data = os.path.join(out_dir, 'test.npz')
+def _process_wav_melspectrogram(file_list, wav_dir, out_dir, q_channels=256):
+    data_dict = {}
+
+    for file_id in tqdm(file_list):
+        filepath = os.path.join(wav_dir, file_id+'.wav')
+        wav = audio.load_wav(filepath)
+        if len(wav) < 5000:
+            wav = np.tile(wav, ceil(5000/len(wav)))
+        melspectrogram = audio.melspectrogram(wav)
+
+        wav_quantized = np_mulaw_quantized(wav, q_channels) 
+
+        data_dict[file_id] = wav_quantized
+        data_dict[file_id+'_h'] = melspectrogram
+    np.savez(out_dir, **data_dict)
+
+def get_wavfiles_list(listfile):
+    with open(listfile, 'r') as f:
+        all_lines = f.readlines()
+    wav_files = [line.split('|')[0] for line in all_lines]
+    return wav_files
+
+def melspectrogram_preprocess(in_dir, out_dir, vocoderinput="melspectrogram", **kwargs):
     os.makedirs(out_dir, exist_ok=True)
 
-    files = [os.path.join(in_dir, f) for f in os.listdir(in_dir)]
-    files.sort()
-    train_files = files[:1032]
-    test_files = files[1032:]
+    wav_dir = os.path.join(in_dir, "wavs")
+    train_list_path = os.path.join(in_dir, "train.csv")
+    test_list_path = os.path.join(in_dir, "test.csv")
 
-    _process_wav(train_files, train_data, **kwargs)
-    _process_wav(test_files, test_data, **kwargs)
+    train_data = os.path.join(out_dir, 'train.npz')
+    test_data = os.path.join(out_dir, 'test.npz')
+
+    train_files = get_wavfiles_list(train_list_path)
+    test_files = get_wavfiles_list(test_list_path)
+    print("Processing testing data ...")
+    _process_wav_melspectrogram(test_files, wav_dir, test_data, **kwargs)
+
+    print("Processing training data ...")
+    _process_wav_melspectrogram(train_files, wav_dir, train_data, **kwargs)
 
     calc_stats(train_data, out_dir)
 
 
 if __name__ == '__main__':
-    preprocess("/media/ycy/Shared/Datasets/cmu_us_rms_arctic/wav", "training_data", winlen=0.025, winstep=0.01,
-               n_mcep=25, mcep_alpha=0.42, minf0=40, maxf0=500,
-               q_channels=256, type='mcc')
+
+    melspectrogram_preprocess(sys.argv[1],sys.argv[2], "melspectrogram", q_channels=256)

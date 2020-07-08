@@ -2,7 +2,11 @@ import numpy as np
 import torch
 from torch.nn import functional as F
 from scipy.special import expn
-from torchaudio.transforms import MuLawEncoding, MuLawExpanding
+from torchaudio.transforms import MuLawEncoding, MuLawDecoding
+
+def np_mulaw_quantized(x, quantization_channels):
+    x_mu = np_mulaw(x, quantization_channels)
+    return float2class(x_mu, quantization_channels)
 
 
 def encoder(quantization_channels):
@@ -10,7 +14,7 @@ def encoder(quantization_channels):
 
 
 def decoder(quantization_channels):
-    return MuLawExpanding(quantization_channels)
+    return MuLawDecoding(quantization_channels)
 
 
 def np_mulaw(x, quantization_channels):
@@ -27,7 +31,7 @@ def np_inv_mulaw(x, quantization_channels):
 
 def float2class(x, classes):
     mu = classes - 1
-    return np.rint((x + 1) / 2 * mu).astype(int)
+    return np.rint((x + 1) / 2 * mu).astype(np.uint8)
 
 
 def class2float(x, classes):
@@ -136,6 +140,12 @@ def vad(x, hop_size=256, S=None, k=5, med_num=9):
     energy = S.pow(2).sum(-1).mean(0).sqrt()
     energy /= energy.max()
 
+    return _vad_energy(energy, k, med_num)
+
+def vad_mel(melspec, k=5, med_num=9):
+    energy = melspec.pow(2).sum(-1).mean(0).sqrt()
+    energy /= energy.max()
+
     sorted_E, _ = energy.sort()
     sorted_E_d = sorted_E[2:] - sorted_E[:-2]
     smoothed = F.pad(sorted_E_d, (7, 7)).unfold(0, 15, 1).mean(-1)
@@ -150,3 +160,21 @@ def vad(x, hop_size=256, S=None, k=5, med_num=9):
     decision = decision.unfold(0, med_num, 1)
     decision, _ = decision.median(dim=-1)
     return decision
+
+def _vad_energy(energy, k, med_num):
+    sorted_E, _ = energy.sort()
+    sorted_E_d = sorted_E[2:] - sorted_E[:-2]
+    smoothed = F.pad(sorted_E_d, (7, 7)).unfold(0, 15, 1).mean(-1)
+    sorted_E_d_peak = F.relu(smoothed[1:-1] - smoothed[:-2]) * F.relu(smoothed[1:-1] - smoothed[2:])
+
+    first, *dummy = torch.nonzero(sorted_E_d_peak) + 2
+    E_th = sorted_E[:first].mean() * k
+    decision = torch.gt(energy, E_th)
+
+    pad = (med_num // 2, med_num // 2)
+    decision = F.pad(decision, pad)
+    decision = decision.unfold(0, med_num, 1)
+    decision = decision.int().sort()[0].bool()
+    return decision
+
+

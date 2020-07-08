@@ -48,22 +48,21 @@ class CMU_Dataset(Dataset):
 
     def __getitem__(self, index):
         name = self.names_list[index]
-        audio = self.data_buffer[name].astype(int)
+        audio = self.data_buffer[name]
         local_condition = self.data_buffer[name + '_h']
-
+        #print(name)
         if self.train:
             rand_pos = np.random.randint(0, len(audio) - self.sample_size - self.predict_dist)
             target = audio[rand_pos + self.predict_dist:rand_pos + self.predict_dist + self.sample_size]
             audio = audio[rand_pos:rand_pos + self.sample_size]
 
             if self.injected_noise:
-                audio += np.rint(np.random.randn(self.sample_size) * 0.5).astype(int)
-                audio = np.clip(audio, 0, self.channels - 1)
+                audio = np.clip(audio+np.rint(np.random.randn(self.sample_size)), 0, self.channels-1)
 
             # interpolation
             if self.interp_method == 'linear':
                 x = np.arange(local_condition.shape[1]) * self.hopsize
-                f = interp1d(x, local_condition, copy=False, axis=1)
+                f = interp1d(x, local_condition, copy=False, axis=1, fill_value="extrapolate")
                 local_condition = f(
                     np.arange(rand_pos + self.predict_dist, rand_pos + self.predict_dist + self.sample_size))
             elif self.interp_method == 'repeat':

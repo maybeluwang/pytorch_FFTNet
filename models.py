@@ -102,24 +102,24 @@ class general_FFTNet(nn.Module):
             device = 'cuda'
         else:
             device = 'cpu'
-
-        if hasattr(self, "buffers"):
-            for buf in self.buffers:
+        
+        if hasattr(self, "buffers_"):
+            for buf in self.buffers_:
                 buf.fill_(0.).to(device)
         else:
-            self.buffers = [
+            self.buffers_ = [
                 torch.zeros(1, self.classes,
                             self.N_seq[0] - self.N_seq[0] // self.radixs[0] + self.predict_dist).float().to(device)]
-            self.buffers += [torch.zeros(1, self.channels, N - N // r + self.predict_dist).float().to(device) for N, r
+            self.buffers_ += [torch.zeros(1, self.channels, N - N // r + self.predict_dist).float().to(device) for N, r
                              in zip(self.N_seq[1:], self.radixs[1:])]
-        self.buffers[0][:, self.classes // 2] = 1
+        self.buffers_[0][:, self.classes // 2] = 1
 
     def one_sample_generate(self, samples, h=None, c=1., method='sampling'):
         samples = self.one_hot(samples).t()
-        for i in range(len(self.buffers)):
-            torch.cat((self.buffers[i][:, :, self.predict_dist:], samples.view(1, -1, self.predict_dist)), 2,
-                      out=self.buffers[i])
-            samples = self.fft_layers[i](self.buffers[i], h, False)
+        for i in range(len(self.buffers_)):
+            torch.cat((self.buffers_[i][:, :, self.predict_dist:], samples.view(1, -1, self.predict_dist)), 2,
+                      out=self.buffers_[i])
+            samples = self.fft_layers[i](self.buffers_[i], h, False)
 
         logits = self.fc_out(samples.transpose(1, 2)).view(self.predict_dist, self.classes) * c
         if method == 'argmax':

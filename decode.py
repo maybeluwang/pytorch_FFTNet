@@ -1,3 +1,4 @@
+import librosa
 import torch
 from torch.nn import functional as F
 from tqdm import tqdm
@@ -8,12 +9,15 @@ from torchaudio import save
 from sklearn.preprocessing import StandardScaler
 from scipy.interpolate import interp1d
 from datetime import datetime
-from utils import decoder, logmmse, vad
+from utils import decoder
+from logmmse import logmmse
 from preprocess import get_features
-
+import audio
+from hparams import hparams
 parser = argparse.ArgumentParser()
+parser.add_argument('--scaler_file', type=str, default=None)
 parser.add_argument('--infile', type=str, default=None)
-parser.add_argument('--outfile', type=str, default=None)
+parser.add_argument('--save_path', type=str, default=None)
 parser.add_argument('--data_dir', type=str, default='slt_mcc_data')
 parser.add_argument('--feature_type', type=str, default='mcc')
 parser.add_argument('--feature_dim', type=int, default=25, help='number of mcc coefficients')
@@ -33,16 +37,15 @@ parser.add_argument('--cuda', action='store_true')
 parser.add_argument('--denoise', action='store_true')
 parser.add_argument('--noise_std', type=float, default=0.005)
 
-sampling_rate = 16000
 
 if __name__ == '__main__':
     args = parser.parse_args()
     net = torch.load(args.model_file)
     scaler = StandardScaler()
-    scaler_info = np.load(os.path.join(args.data_dir, 'scaler.npz'))
+    scaler_info = np.load(args.scaler_file)
     scaler.mean_ = scaler_info['mean']
     scaler.scale_ = scaler_info['scale']
-
+    filename = args.infile
     net.eval()
     if not args.cuda:
         net = net.cpu()
@@ -55,17 +58,16 @@ if __name__ == '__main__':
         if args.infile is None:
             # haven't implement
             pass
-        elif args.outfile is not None:
-            id, x, h = get_features(args.infile, winlen=args.window_length, winstep=args.window_step,
-                                    n_mcep=args.feature_dim, mcep_alpha=args.mcep_alpha, minf0=args.minimum_f0,
-                                    maxf0=args.maximum_f0, type=args.feature_type)
-
+        elif args.save_path is not None:
+            x = audio.load_wav(filename)
+            h = audio.melspectrogram(x)
+            id = os.path.basename(filename).replace(".wav", "")
             h = scaler.transform(h.T).T
             # interpolation
-            hopsize = int(sampling_rate * args.window_step)
+            hopsize = hparams.frame_shift
             if args.interp_method == 'linear':
                 xx = np.arange(h.shape[1]) * hopsize
-                f = interp1d(xx, h, copy=False, axis=1)
+                f = interp1d(xx, h, copy=False, axis=1, fill_value="extrapolate")
                 h = f(np.arange(xx[-1]))
             elif args.interp_method == 'repeat':
                 h = np.repeat(h, hopsize, axis=1)
@@ -76,8 +78,8 @@ if __name__ == '__main__':
             h = torch.from_numpy(h).unsqueeze(0).float()
             r_field = net.get_receptive_field()
             pred_dist = net.get_predict_distance()
-
-            vad_curve = vad(torch.from_numpy(x), hopsize).numpy()
+            zcr = librosa.feature.zero_crossing_rate(x,frame_length = hparams.frame_length, hop_length = hparams.frame_shift)
+            vad_curve = (zcr <=0.2)
             vad_curve = np.repeat(vad_curve, hopsize)
 
             output_buf = torch.empty(h.size(2)).long()
@@ -88,7 +90,6 @@ if __name__ == '__main__':
                 samples = samples.cuda()
 
             net.init_buf()
-            print("Decoding file", args.infile)
             a = datetime.now().replace(microsecond=0)
             for pos in tqdm(range(r_field + pred_dist, h.size(2) + 1, pred_dist)):
                 out_pos = pos - r_field - pred_dist
@@ -102,9 +103,12 @@ if __name__ == '__main__':
             cost = datetime.now().replace(microsecond=0) - a
             dec = decoder(args.q_channels)
             generation = dec(output_buf)
+            result = generation.cpu().numpy()
             if args.denoise:
-                generation = logmmse(generation, sampling_rate, noise_std=args.noise_std)
-            save(args.outfile, generation.view(-1, 1), sampling_rate)
+                result = logmmse(result, hparams.sample_rate)
+            
+            audio.save_wav(result, args.save_path)
             print("Speed:", generation.size(0) / cost.total_seconds(), "samples/sec.")
+            print('file saved in', args.save_path)
         else:
             print("Please enter output file name.")
